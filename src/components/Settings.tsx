@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'; 
 import { ref, set, onValue } from 'firebase/database'; 
 import { database } from '../firebase'; 
-import { FaTrash, FaImages, FaArrowUp, FaArrowDown, FaPercentage, FaMoneyBillWave } from 'react-icons/fa'; 
+import { FaTrash, FaImages, FaArrowUp, FaArrowDown } from 'react-icons/fa'; 
 
 interface AppConfig {
   logoUrl: string;
@@ -9,7 +9,7 @@ interface AppConfig {
   sliderImages: SliderImage[];
   supportUrl: string;
   tutorialVideoId: string;
-  referralCommission: ReferralCommission;
+  referralCommission: number;
 }
 
 interface SliderImage {
@@ -20,20 +20,6 @@ interface SliderImage {
   createdAt: string;
 }
 
-interface ReferralCommission {
-  enabled: boolean;
-  commissionRate: number; // Percentage
-  minWithdrawal: number;
-  currency: string;
-  levels: CommissionLevel[];
-}
-
-interface CommissionLevel {
-  level: number;
-  rate: number;
-  description: string;
-}
-
 const AdminPanel: React.FC = () => {
   const [appConfig, setAppConfig] = useState<AppConfig>({
     logoUrl: "",
@@ -41,19 +27,8 @@ const AdminPanel: React.FC = () => {
     sliderImages: [],
     supportUrl: "",
     tutorialVideoId: "",
-    referralCommission: {
-      enabled: false,
-      commissionRate: 10,
-      minWithdrawal: 10,
-      currency: "USDT",
-      levels: [
-        { level: 1, rate: 10, description: "Direct Referral" },
-        { level: 2, rate: 5, description: "Second Level" },
-        { level: 3, rate: 2, description: "Third Level" }
-      ]
-    }
+    referralCommission: 0
   });
-  
   const [logoFile, setLogoFile] = useState<File | null>(null);
   const [sliderFiles, setSliderFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -61,7 +36,6 @@ const AdminPanel: React.FC = () => {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [editingLevel, setEditingLevel] = useState<number | null>(null);
 
   useEffect(() => {
     console.log('AdminPanel: Starting Firebase connection...');
@@ -80,17 +54,7 @@ const AdminPanel: React.FC = () => {
             sliderImages: data.sliderImages || [],
             supportUrl: data.supportUrl || "",
             tutorialVideoId: data.tutorialVideoId || "",
-            referralCommission: data.referralCommission || {
-              enabled: false,
-              commissionRate: 10,
-              minWithdrawal: 10,
-              currency: "USDT",
-              levels: [
-                { level: 1, rate: 10, description: "Direct Referral" },
-                { level: 2, rate: 5, description: "Second Level" },
-                { level: 3, rate: 2, description: "Third Level" }
-              ]
-            }
+            referralCommission: data.referralCommission || 0
           });
         } else {
           console.log('AdminPanel: No data found in Firebase, using defaults');
@@ -114,12 +78,213 @@ const AdminPanel: React.FC = () => {
     }
   }, []);
 
-  // ... (keep all your existing functions like uploadToCloudinary, handleLogoUpload, etc.)
+  const uploadToCloudinary = async (file: File): Promise<string> => {
+    console.log('Uploading to Cloudinary:', file.name);
+    
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('upload_preset', 'ml_default');
+    formData.append('cloud_name', 'deu1ngeov');
+    formData.append('api_key', '872479185859578');
 
-  const handleReferralCommissionUpdate = async () => {
+    try {
+      const response = await fetch(
+        `https://api.cloudinary.com/v1_1/deu1ngeov/image/upload`,
+        {
+          method: 'POST',
+          body: formData,
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error(`Upload failed with status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      console.log('Cloudinary upload successful:', data.secure_url);
+      return data.secure_url;
+    } catch (error) {
+      console.error('Cloudinary upload error:', error);
+      throw new Error(`Failed to upload image: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  };
+
+  const handleLogoUpload = async () => {
+    if (!logoFile) return;
+
+    setUploading(true);
+    setMessage("");
+    setError(null);
+
+    try {
+      const imageUrl = await uploadToCloudinary(logoFile);
+      
+      const updatedConfig = {
+        ...appConfig,
+        logoUrl: imageUrl
+      };
+      
+      await set(ref(database, 'appConfig'), updatedConfig);
+      setAppConfig(updatedConfig);
+      setLogoFile(null);
+      setMessage("Logo uploaded successfully to Cloudinary!");
+    } catch (error) {
+      console.error("Error uploading logo:", error);
+      const errorMessage = error instanceof Error ? error.message : "Error uploading logo. Please try again.";
+      setMessage(errorMessage);
+      setError(errorMessage);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleSliderUpload = async () => {
+    if (sliderFiles.length === 0) return;
+
+    setUploading(true);
+    setMessage("");
+    setUploadProgress(0);
+    setError(null);
+
+    try {
+      const uploadedImages: SliderImage[] = [...(appConfig.sliderImages || [])];
+      
+      for (let i = 0; i < sliderFiles.length; i++) {
+        const file = sliderFiles[i];
+        const imageUrl = await uploadToCloudinary(file);
+        
+        const newImage: SliderImage = {
+          id: `slider-${Date.now()}-${i}`,
+          url: imageUrl,
+          alt: `Slider Image ${uploadedImages.length + i + 1}`,
+          order: uploadedImages.length + i,
+          createdAt: new Date().toISOString()
+        };
+        
+        uploadedImages.push(newImage);
+        
+        setUploadProgress(Math.round(((i + 1) / sliderFiles.length) * 100));
+      }
+
+      const updatedConfig = {
+        ...appConfig,
+        sliderImages: uploadedImages
+      };
+      
+      await set(ref(database, 'appConfig'), updatedConfig);
+      setAppConfig(updatedConfig);
+      setSliderFiles([]);
+      setUploadProgress(0);
+      setMessage(`${sliderFiles.length} slider images uploaded successfully!`);
+    } catch (error) {
+      console.error("Error uploading slider images:", error);
+      const errorMessage = error instanceof Error ? error.message : "Error uploading slider images. Please try again.";
+      setMessage(errorMessage);
+      setError(errorMessage);
+      setUploadProgress(0);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const removeSliderImage = async (imageId: string) => {
+    try {
+      const currentImages = appConfig.sliderImages || [];
+      const updatedSliderImages = currentImages.filter(img => img.id !== imageId)
+        .map((img, index) => ({
+          ...img,
+          order: index
+        }));
+      
+      const updatedConfig = {
+        ...appConfig,
+        sliderImages: updatedSliderImages
+      };
+      
+      await set(ref(database, 'appConfig'), updatedConfig);
+      setAppConfig(updatedConfig);
+      setMessage("Slider image removed successfully!");
+    } catch (error) {
+      console.error("Error removing slider image:", error);
+      const errorMessage = error instanceof Error ? error.message : "Error removing slider image. Please try again.";
+      setMessage(errorMessage);
+      setError(errorMessage);
+    }
+  };
+
+  const moveSliderImage = async (imageId: string, direction: 'up' | 'down') => {
+    try {
+      const currentImages = appConfig.sliderImages || [];
+      const currentIndex = currentImages.findIndex(img => img.id === imageId);
+      if (currentIndex === -1) return;
+
+      const newIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+      
+      if (newIndex < 0 || newIndex >= currentImages.length) return;
+
+      const updatedSliderImages = [...currentImages];
+      const [movedImage] = updatedSliderImages.splice(currentIndex, 1);
+      updatedSliderImages.splice(newIndex, 0, movedImage);
+      
+      const reorderedImages = updatedSliderImages.map((img, index) => ({
+        ...img,
+        order: index
+      }));
+
+      const updatedConfig = {
+        ...appConfig,
+        sliderImages: reorderedImages
+      };
+      
+      await set(ref(database, 'appConfig'), updatedConfig);
+      setAppConfig(updatedConfig);
+      setMessage(`Slider image moved ${direction} successfully!`);
+    } catch (error) {
+      console.error("Error moving slider image:", error);
+      const errorMessage = error instanceof Error ? error.message : "Error moving slider image. Please try again.";
+      setMessage(errorMessage);
+      setError(errorMessage);
+    }
+  };
+
+  const handleAppNameUpdate = async () => {
+    if (!appConfig.appName.trim()) {
+      setMessage("App name cannot be empty!");
+      return;
+    }
+
     try {
       await set(ref(database, 'appConfig'), appConfig);
-      setMessage("Referral commission settings updated successfully!");
+      setMessage("App name updated successfully!");
+    } catch (error) {
+      console.error("Error updating app name:", error);
+      const errorMessage = error instanceof Error ? error.message : "Error updating app name. Please try again.";
+      setMessage(errorMessage);
+      setError(errorMessage);
+    }
+  };
+
+  const handleSupportTutorialUpdate = async () => {
+    try {
+      await set(ref(database, 'appConfig'), appConfig);
+      setMessage("Support & Tutorial settings updated successfully!");
+    } catch (error) {
+      console.error("Error updating support & tutorial settings:", error);
+      const errorMessage = error instanceof Error ? error.message : "Error updating settings. Please try again.";
+      setMessage(errorMessage);
+      setError(errorMessage);
+    }
+  };
+
+  const handleReferralCommissionUpdate = async () => {
+    if (appConfig.referralCommission < 0 || appConfig.referralCommission > 100) {
+      setMessage("Referral commission must be between 0 and 100!");
+      return;
+    }
+
+    try {
+      await set(ref(database, 'appConfig'), appConfig);
+      setMessage(`Referral commission updated to ${appConfig.referralCommission}% successfully!`);
     } catch (error) {
       console.error("Error updating referral commission:", error);
       const errorMessage = error instanceof Error ? error.message : "Error updating referral commission. Please try again.";
@@ -128,127 +293,76 @@ const AdminPanel: React.FC = () => {
     }
   };
 
-  const handleCommissionRateChange = (value: string) => {
-    const rate = parseFloat(value);
-    if (!isNaN(rate) && rate >= 0 && rate <= 100) {
-      setAppConfig(prev => ({
-        ...prev,
-        referralCommission: {
-          ...prev.referralCommission,
-          commissionRate: rate
-        }
-      }));
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const file = e.target.files[0];
+      
+      if (!file.type.startsWith('image/')) {
+        setMessage("Please select a valid image file.");
+        return;
+      }
+      
+      if (file.size > 5 * 1024 * 1024) {
+        setMessage("Image size should be less than 5MB.");
+        return;
+      }
+      
+      setLogoFile(file);
+      setMessage("");
+      setError(null);
     }
   };
 
-  const handleMinWithdrawalChange = (value: string) => {
-    const amount = parseFloat(value);
-    if (!isNaN(amount) && amount >= 0) {
-      setAppConfig(prev => ({
-        ...prev,
-        referralCommission: {
-          ...prev.referralCommission,
-          minWithdrawal: amount
+  const handleSliderFilesChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      const files = Array.from(e.target.files);
+      
+      for (const file of files) {
+        if (!file.type.startsWith('image/')) {
+          setMessage("Please select valid image files only.");
+          return;
         }
-      }));
+        
+        if (file.size > 5 * 1024 * 1024) {
+          setMessage("Each image should be less than 5MB.");
+          return;
+        }
+      }
+      
+      setSliderFiles(files);
+      setMessage("");
+      setError(null);
     }
   };
 
-  const handleCurrencyChange = (currency: string) => {
+  const handleInputChange = (field: keyof AppConfig, value: string | number) => {
     setAppConfig(prev => ({
       ...prev,
-      referralCommission: {
-        ...prev.referralCommission,
-        currency
-      }
+      [field]: value
     }));
   };
 
-  const handleLevelRateChange = (levelIndex: number, rate: string) => {
-    const newRate = parseFloat(rate);
-    if (!isNaN(newRate) && newRate >= 0 && newRate <= 100) {
-      const updatedLevels = [...appConfig.referralCommission.levels];
-      updatedLevels[levelIndex] = {
-        ...updatedLevels[levelIndex],
-        rate: newRate
+  const clearAllSliders = async () => {
+    if (!confirm("Are you sure you want to remove all slider images?")) return;
+    
+    try {
+      const updatedConfig = {
+        ...appConfig,
+        sliderImages: []
       };
       
-      setAppConfig(prev => ({
-        ...prev,
-        referralCommission: {
-          ...prev.referralCommission,
-          levels: updatedLevels
-        }
-      }));
+      await set(ref(database, 'appConfig'), updatedConfig);
+      setAppConfig(updatedConfig);
+      setMessage("All slider images removed successfully!");
+    } catch (error) {
+      console.error("Error clearing slider images:", error);
+      const errorMessage = error instanceof Error ? error.message : "Error clearing slider images. Please try again.";
+      setMessage(errorMessage);
+      setError(errorMessage);
     }
   };
 
-  const handleLevelDescriptionChange = (levelIndex: number, description: string) => {
-    const updatedLevels = [...appConfig.referralCommission.levels];
-    updatedLevels[levelIndex] = {
-      ...updatedLevels[levelIndex],
-      description
-    };
-    
-    setAppConfig(prev => ({
-      ...prev,
-      referralCommission: {
-        ...prev.referralCommission,
-        levels: updatedLevels
-      }
-    }));
-  };
-
-  const addCommissionLevel = () => {
-    const currentLevels = appConfig.referralCommission.levels;
-    const newLevel = {
-      level: currentLevels.length + 1,
-      rate: 1,
-      description: `Level ${currentLevels.length + 1}`
-    };
-    
-    setAppConfig(prev => ({
-      ...prev,
-      referralCommission: {
-        ...prev.referralCommission,
-        levels: [...currentLevels, newLevel]
-      }
-    }));
-  };
-
-  const removeCommissionLevel = (levelIndex: number) => {
-    if (appConfig.referralCommission.levels.length <= 1) {
-      setMessage("At least one commission level is required!");
-      return;
-    }
-    
-    const updatedLevels = appConfig.referralCommission.levels
-      .filter((_, index) => index !== levelIndex)
-      .map((level, index) => ({
-        ...level,
-        level: index + 1
-      }));
-    
-    setAppConfig(prev => ({
-      ...prev,
-      referralCommission: {
-        ...prev.referralCommission,
-        levels: updatedLevels
-      }
-    }));
-  };
-
-  const toggleCommissionSystem = () => {
-    setAppConfig(prev => ({
-      ...prev,
-      referralCommission: {
-        ...prev.referralCommission,
-        enabled: !prev.referralCommission.enabled
-      }
-    }));
-  };
-
-  // Loading state (keep your existing loading state)
+  // Loading state
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-900 text-white p-6 flex items-center justify-center">
@@ -260,7 +374,7 @@ const AdminPanel: React.FC = () => {
     );
   }
 
-  // Error state (keep your existing error state)
+  // Error state
   if (error) {
     return (
       <div className="min-h-screen bg-gray-900 text-white p-6">
@@ -291,207 +405,290 @@ const AdminPanel: React.FC = () => {
           </p>
         </div>
 
-        {/* Referral Commission Section */}
+        {/* Logo Upload Section */}
+        <div className="bg-gray-800 rounded-lg p-6 mb-6">
+          <h2 className="text-xl font-semibold mb-4 text-blue-300">Upload Logo to Cloudinary</h2>
+          
+          <div className="mb-4">
+            <label className="block text-sm font-medium mb-2">Current Logo:</label>
+            {appConfig.logoUrl ? (
+              <img 
+                src={appConfig.logoUrl}
+                alt="Current Logo"
+                className="w-20 h-20 object-cover rounded-full border-2 border-blue-400"
+              />
+            ) : (
+              <div className="w-20 h-20 rounded-full border-2 border-dashed border-gray-600 flex items-center justify-center">
+                <span className="text-gray-400 text-xs">No logo</span>
+              </div>
+            )}
+          </div>
+
+          <div className="mb-4">
+            <label className="block text-sm font-medium mb-2">Select New Logo:</label>
+            <input
+              type="file"
+              accept="image/*"
+              onChange={handleFileChange}
+              className="block w-full text-sm text-gray-400
+                file:mr-4 file:py-2 file:px-4
+                file:rounded-full file:border-0
+                file:text-sm file:font-semibold
+                file:bg-blue-500 file:text-white
+                hover:file:bg-blue-600
+                bg-gray-700 rounded-lg p-2"
+            />
+            <p className="text-xs text-gray-400 mt-1">
+              Supported formats: JPG, PNG, GIF. Max size: 5MB
+            </p>
+          </div>
+
+          <button
+            onClick={handleLogoUpload}
+            disabled={!logoFile || uploading}
+            className="bg-blue-500 hover:bg-blue-600 text-white font-semibold py-2 px-6 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition duration-200"
+          >
+            {uploading ? (
+              <span className="flex items-center">
+                <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                Uploading...
+              </span>
+            ) : (
+              'Upload to Cloudinary'
+            )}
+          </button>
+        </div>
+
+        {/* Slider Images Section */}
         <div className="bg-gray-800 rounded-lg p-6 mb-6">
           <div className="flex justify-between items-center mb-4">
-            <h2 className="text-xl font-semibold text-blue-300 flex items-center">
-              <FaMoneyBillWave className="mr-2" />
-              Referral Commission System
-            </h2>
-            <div className="flex items-center">
-              <span className="mr-2 text-sm">Enable System:</span>
+            <h2 className="text-xl font-semibold text-blue-300">Slider Images Management</h2>
+            {appConfig.sliderImages && appConfig.sliderImages.length > 0 && (
               <button
-                onClick={toggleCommissionSystem}
-                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                  appConfig.referralCommission.enabled ? 'bg-green-500' : 'bg-gray-600'
-                }`}
+                onClick={clearAllSliders}
+                className="bg-red-500 hover:bg-red-600 text-white font-semibold py-2 px-4 rounded-lg transition duration-200"
               >
-                <span
-                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                    appConfig.referralCommission.enabled ? 'translate-x-6' : 'translate-x-1'
-                  }`}
-                />
+                Clear All
               </button>
-            </div>
+            )}
           </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-            <div>
-              <label className="block text-sm font-medium mb-2">
-                Default Commission Rate (%):
-              </label>
-              <div className="relative">
-                <input
-                  type="number"
-                  min="0"
-                  max="100"
-                  step="0.1"
-                  value={appConfig.referralCommission.commissionRate}
-                  onChange={(e) => handleCommissionRateChange(e.target.value)}
-                  className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  placeholder="10"
-                />
-                <FaPercentage className="absolute right-3 top-2 text-gray-400" />
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium mb-2">
-                Minimum Withdrawal:
-              </label>
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                value={appConfig.referralCommission.minWithdrawal}
-                onChange={(e) => handleMinWithdrawalChange(e.target.value)}
-                className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                placeholder="10"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium mb-2">
-                Currency:
-              </label>
-              <select
-                value={appConfig.referralCommission.currency}
-                onChange={(e) => handleCurrencyChange(e.target.value)}
-                className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              >
-                <option value="USDT">USDT</option>
-                <option value="USD">USD</option>
-                <option value="EUR">EUR</option>
-                <option value="BTC">BTC</option>
-                <option value="ETH">ETH</option>
-              </select>
-            </div>
-          </div>
-
-          {/* Multi-Level Commission */}
-          <div className="mb-6">
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="text-lg font-semibold text-green-300">Multi-Level Commission</h3>
-              <button
-                onClick={addCommissionLevel}
-                className="bg-green-500 hover:bg-green-600 text-white font-semibold py-2 px-4 rounded-lg transition duration-200"
-              >
-                Add Level
-              </button>
-            </div>
-
-            <div className="space-y-3">
-              {appConfig.referralCommission.levels.map((level, index) => (
-                <div key={index} className="bg-gray-700 rounded-lg p-4">
-                  <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
-                    <div className="md:col-span-2">
-                      <label className="block text-sm font-medium mb-1">Level {level.level}:</label>
-                      <div className="text-sm text-gray-300 bg-gray-600 px-3 py-2 rounded">
-                        Level {level.level}
+          
+          <div className="mb-4">
+            <label className="block text-sm font-medium mb-2">
+              Current Slider Images ({(appConfig.sliderImages || []).length}):
+            </label>
+            
+            {appConfig.sliderImages && appConfig.sliderImages.length > 0 ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {appConfig.sliderImages.sort((a, b) => a.order - b.order).map((image, index) => (
+                  <div key={image.id} className="relative group bg-gray-700 rounded-lg p-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-sm text-gray-300">Order: {image.order + 1}</span>
+                      <div className="flex space-x-1">
+                        <button
+                          onClick={() => moveSliderImage(image.id, 'up')}
+                          disabled={index === 0}
+                          className="p-1 bg-blue-500 hover:bg-blue-600 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                          title="Move up"
+                        >
+                          <FaArrowUp className="w-3 h-3" />
+                        </button>
+                        <button
+                          onClick={() => moveSliderImage(image.id, 'down')}
+                          disabled={index === appConfig.sliderImages.length - 1}
+                          className="p-1 bg-blue-500 hover:bg-blue-600 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                          title="Move down"
+                        >
+                          <FaArrowDown className="w-3 h-3" />
+                        </button>
                       </div>
                     </div>
                     
-                    <div className="md:col-span-4">
-                      <label className="block text-sm font-medium mb-1">Description:</label>
-                      <input
-                        type="text"
-                        value={level.description}
-                        onChange={(e) => handleLevelDescriptionChange(index, e.target.value)}
-                        className="w-full px-3 py-2 bg-gray-600 border border-gray-500 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                        placeholder="Direct Referral"
-                      />
-                    </div>
-
-                    <div className="md:col-span-3">
-                      <label className="block text-sm font-medium mb-1">Commission Rate (%):</label>
-                      <div className="relative">
-                        <input
-                          type="number"
-                          min="0"
-                          max="100"
-                          step="0.1"
-                          value={level.rate}
-                          onChange={(e) => handleLevelRateChange(index, e.target.value)}
-                          className="w-full px-3 py-2 bg-gray-600 border border-gray-500 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                        />
-                        <FaPercentage className="absolute right-3 top-2 text-gray-400" />
-                      </div>
-                    </div>
-
-                    <div className="md:col-span-3 flex justify-end space-x-2">
-                      {appConfig.referralCommission.levels.length > 1 && (
-                        <button
-                          onClick={() => removeCommissionLevel(index)}
-                          className="bg-red-500 hover:bg-red-600 text-white font-semibold py-2 px-4 rounded-lg transition duration-200"
-                        >
-                          Remove
-                        </button>
-                      )}
+                    <img 
+                      src={image.url}
+                      alt={image.alt}
+                      className="w-full h-32 object-cover rounded-lg border-2 border-gray-600 mb-2"
+                    />
+                    
+                    <div className="flex justify-between items-center">
+                      <span className="text-xs text-gray-400 truncate flex-1 mr-2">
+                        {image.alt}
+                      </span>
+                      <button
+                        onClick={() => removeSliderImage(image.id)}
+                        className="p-2 bg-red-500 hover:bg-red-600 text-white rounded-lg transition duration-200"
+                        title="Remove image"
+                      >
+                        <FaTrash className="w-3 h-3" />
+                      </button>
                     </div>
                   </div>
-                </div>
-              ))}
+                ))}
+              </div>
+            ) : (
+              <div className="col-span-3 text-center py-8 border-2 border-dashed border-gray-600 rounded-lg">
+                <FaImages className="text-4xl text-gray-400 mx-auto mb-2" />
+                <span className="text-gray-400">No slider images uploaded yet</span>
+              </div>
+            )}
+          </div>
+
+          {/* Upload Progress */}
+          {uploading && uploadProgress > 0 && (
+            <div className="mb-4">
+              <div className="flex justify-between text-sm mb-1">
+                <span>Uploading images...</span>
+                <span>{uploadProgress}%</span>
+              </div>
+              <div className="w-full bg-gray-700 rounded-full h-2">
+                <div 
+                  className="bg-green-500 h-2 rounded-full transition-all duration-300"
+                  style={{ width: `${uploadProgress}%` }}
+                ></div>
+              </div>
             </div>
+          )}
+
+          <div className="mb-4">
+            <label className="block text-sm font-medium mb-2">Select New Slider Images:</label>
+            <input
+              type="file"
+              accept="image/*"
+              multiple
+              onChange={handleSliderFilesChange}
+              className="block w-full text-sm text-gray-400
+                file:mr-4 file:py-2 file:px-4
+                file:rounded-full file:border-0
+                file:text-sm file:font-semibold
+                file:bg-green-500 file:text-white
+                hover:file:bg-green-600
+                bg-gray-700 rounded-lg p-2"
+            />
+            <p className="text-xs text-gray-400 mt-1">
+              Select multiple images. Supported formats: JPG, PNG, GIF. Max size per image: 5MB
+            </p>
+            {sliderFiles.length > 0 && (
+              <p className="text-green-400 text-sm mt-2">
+                {sliderFiles.length} image(s) selected for upload
+              </p>
+            )}
+          </div>
+
+          <button
+            onClick={handleSliderUpload}
+            disabled={sliderFiles.length === 0 || uploading}
+            className="bg-green-500 hover:bg-green-600 text-white font-semibold py-2 px-6 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition duration-200"
+          >
+            {uploading ? (
+              <span className="flex items-center">
+                <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                Uploading...
+              </span>
+            ) : (
+              `Upload ${sliderFiles.length} Slider Image(s)`
+            )}
+          </button>
+        </div>
+
+        {/* App Name Section */}
+        <div className="bg-gray-800 rounded-lg p-6 mb-6">
+          <h2 className="text-xl font-semibold mb-4 text-blue-300">App Configuration</h2>
+          
+          <div className="mb-4">
+            <label className="block text-sm font-medium mb-2">App Name:</label>
+            <input
+              type="text"
+              value={appConfig.appName}
+              onChange={(e) => handleInputChange('appName', e.target.value)}
+              className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              placeholder="Enter app name"
+            />
+          </div>
+
+          <button
+            onClick={handleAppNameUpdate}
+            disabled={!appConfig.appName.trim()}
+            className="bg-purple-500 hover:bg-purple-600 text-white font-semibold py-2 px-6 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition duration-200"
+          >
+            Update App Name
+          </button>
+        </div>
+
+        {/* Referral Commission Section */}
+        <div className="bg-gray-800 rounded-lg p-6 mb-6">
+          <h2 className="text-xl font-semibold mb-4 text-blue-300">Referral Commission</h2>
+          
+          <div className="mb-4">
+            <label className="block text-sm font-medium mb-2">Referral Commission (%):</label>
+            <input
+              type="number"
+              min="0"
+              max="100"
+              step="0.1"
+              value={appConfig.referralCommission}
+              onChange={(e) => handleInputChange('referralCommission', parseFloat(e.target.value) || 0)}
+              className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              placeholder="Enter referral commission percentage"
+            />
+            <p className="text-xs text-gray-400 mt-1">
+              Set the referral commission percentage (0-100%). This determines how much commission users earn from referrals.
+            </p>
           </div>
 
           <button
             onClick={handleReferralCommissionUpdate}
-            className="bg-purple-500 hover:bg-purple-600 text-white font-semibold py-2 px-6 rounded-lg transition duration-200"
+            disabled={appConfig.referralCommission < 0 || appConfig.referralCommission > 100}
+            className="bg-orange-500 hover:bg-orange-600 text-white font-semibold py-2 px-6 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition duration-200"
           >
-            Update Commission Settings
+            Update Referral Commission
           </button>
         </div>
 
-        {/* Commission Preview */}
+        {/* Support & Tutorial Configuration Section */}
         <div className="bg-gray-800 rounded-lg p-6 mb-6">
-          <h3 className="text-lg font-semibold mb-4 text-blue-300">Commission Preview</h3>
-          <div className="bg-gray-900 p-4 rounded-lg border border-gray-700">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-              <div className="text-center p-4 bg-gray-700 rounded-lg">
-                <div className="text-2xl font-bold text-green-400">
-                  {appConfig.referralCommission.commissionRate}%
-                </div>
-                <div className="text-sm text-gray-300">Default Rate</div>
-              </div>
-              
-              <div className="text-center p-4 bg-gray-700 rounded-lg">
-                <div className="text-2xl font-bold text-blue-400">
-                  {appConfig.referralCommission.minWithdrawal} {appConfig.referralCommission.currency}
-                </div>
-                <div className="text-sm text-gray-300">Min Withdrawal</div>
-              </div>
-              
-              <div className="text-center p-4 bg-gray-700 rounded-lg">
-                <div className="text-2xl font-bold text-yellow-400">
-                  {appConfig.referralCommission.levels.length}
-                </div>
-                <div className="text-sm text-gray-300">Commission Levels</div>
-              </div>
-              
-              <div className="text-center p-4 bg-gray-700 rounded-lg">
-                <div className="text-2xl font-bold text-purple-400">
-                  {appConfig.referralCommission.enabled ? 'Active' : 'Inactive'}
-                </div>
-                <div className="text-sm text-gray-300">System Status</div>
-              </div>
-            </div>
-            
-            {/* Levels Preview */}
-            <div className="mt-4">
-              <h4 className="text-md font-semibold mb-2 text-green-300">Commission Levels:</h4>
-              <div className="space-y-2">
-                {appConfig.referralCommission.levels.map((level, index) => (
-                  <div key={index} className="flex justify-between items-center bg-gray-700 px-4 py-2 rounded">
-                    <span className="text-sm">{level.description}</span>
-                    <span className="text-green-400 font-semibold">{level.rate}%</span>
-                  </div>
-                ))}
-              </div>
-            </div>
+          <h2 className="text-xl font-semibold mb-4 text-blue-300">Support & Tutorial Configuration</h2>
+          
+          <div className="mb-4">
+            <label className="block text-sm font-medium mb-2">Support Telegram URL:</label>
+            <input
+              type="text"
+              value={appConfig.supportUrl || ''}
+              onChange={(e) => handleInputChange('supportUrl', e.target.value)}
+              className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              placeholder="https://t.me/YourChannelName"
+            />
+            <p className="text-xs text-gray-400 mt-1">
+              Enter the full Telegram URL for support
+            </p>
           </div>
-        </div>
 
-        {/* ... (keep all your existing sections: Logo Upload, Slider Images, App Name, Support & Tutorial) */}
+          <div className="mb-4">
+            <label className="block text-sm font-medium mb-2">YouTube Tutorial Video ID:</label>
+            <input
+              type="text"
+              value={appConfig.tutorialVideoId || ''}
+              onChange={(e) => handleInputChange('tutorialVideoId', e.target.value)}
+              className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              placeholder="dQw4w9WgXcQ"
+            />
+            <p className="text-xs text-gray-400 mt-1">
+              Enter only the YouTube video ID (the part after "v=" in the URL)
+            </p>
+          </div>
+
+          <button
+            onClick={handleSupportTutorialUpdate}
+            className="bg-purple-500 hover:bg-purple-600 text-white font-semibold py-2 px-6 rounded-lg transition duration-200"
+          >
+            Update Support & Tutorial
+          </button>
+        </div>
 
         {/* Message Display */}
         {message && (
@@ -513,6 +710,79 @@ const AdminPanel: React.FC = () => {
           </div>
         )}
 
+        {/* Live Preview Section */}
+        <div className="bg-gray-800 rounded-lg p-6">
+          <h2 className="text-xl font-semibold mb-4 text-blue-300">Live Preview</h2>
+          <div className="bg-gray-900 p-4 rounded-lg border border-gray-700">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <div className="rounded-3xl bg-[#0a1a2b] border border-[#014983]/30">
+                  <img
+                    src={appConfig.logoUrl || "https://res.cloudinary.com/deu1ngeov/image/upload/v1758400527/slide3_lds1l1.jpg"}
+                    alt="logo preview"
+                    className="w-10 h-10 object-cover rounded-full"
+                  />
+                </div>
+                <p className="text-sm text-blue-400">{appConfig.appName || "PRIME V1"}</p>
+              </div>
+              
+              <div className="flex items-center border-2 border-[#014983]/40 rounded-full px-4 py-[2px] bg-[#0a1a2b]">
+                <div className="h-[32px] w-[2px] bg-[#014983]/40 mx-2"></div>
+                <div className="flex-1 text-center">
+                  <p className="text-xs text-blue-300 font-medium">Balance</p>
+                  <p className="text-sm text-green-500">USDT 0.00</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Slider Preview */}
+            {appConfig.sliderImages && appConfig.sliderImages.length > 0 && (
+              <div className="mt-4">
+                <h3 className="text-sm font-medium mb-2 text-blue-300">Slider Preview:</h3>
+                <div className="grid grid-cols-2 gap-2">
+                  {appConfig.sliderImages.slice(0, 2).map((image, index) => (
+                    <img
+                      key={image.id}
+                      src={image.url}
+                      alt={`Slider Preview ${index + 1}`}
+                      className="w-full h-20 object-cover rounded-lg"
+                    />
+                  ))}
+                </div>
+                {appConfig.sliderImages.length > 2 && (
+                  <p className="text-xs text-gray-400 mt-1">
+                    +{appConfig.sliderImages.length - 2} more images
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* Support & Tutorial Preview */}
+            <div className="mt-4">
+              <h3 className="text-sm font-medium mb-2 text-blue-300">Support & Tutorial Preview:</h3>
+              <div className="space-y-2">
+                <div className="flex justify-between items-center text-xs">
+                  <span className="text-gray-400">Support URL:</span>
+                  <span className="text-blue-300 truncate max-w-[200px]">
+                    {appConfig.supportUrl || "Not configured"}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center text-xs">
+                  <span className="text-gray-400">Tutorial Video ID:</span>
+                  <span className="text-blue-300">
+                    {appConfig.tutorialVideoId || "Not configured"}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center text-xs">
+                  <span className="text-gray-400">Referral Commission:</span>
+                  <span className="text-orange-300">
+                    {appConfig.referralCommission || 0}%
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
